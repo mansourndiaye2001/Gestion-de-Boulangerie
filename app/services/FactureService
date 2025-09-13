@@ -1,0 +1,110 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\Commande;
+use App\Models\Facture;
+use Barryvdh\DomPDF\Facade\Pdf; 
+use Illuminate\Support\Facades\Storage;
+
+class FactureService
+{
+    private float $tauxTVA = 18.0;
+
+    /**
+     * Génère une facture à partir d'une commande
+     */
+    public function genererFacture(Commande $commande): Facture
+    {
+        $user = $commande->user;
+
+        // Calculer les montants
+        $sousTotal = $commande->montant_total;
+        $tvaAmount = $this->calculerTVA($sousTotal);
+        $montantTotal = $sousTotal + $tvaAmount;
+
+        // Créer la facture
+        $facture = Facture::create([
+            'numero_facture' => Facture::genererNumeroFacture(),
+            'commande_id' => $commande->id,
+            'user_id' => $user->id,
+            'nom_client' => $user->name,
+            'email_client' => $user->email,
+            'telephone_client' => $commande->telephone_livraison,
+            'adresse_client' => $commande->adresse_livraison,
+            'sous_total' => $sousTotal,
+            'tva_montant' => $tvaAmount,
+            'montant_total' => $montantTotal,
+            'date_emission' => now(),
+        ]);
+
+        return $facture;
+    }
+
+    /**
+     * Génère le PDF de la facture
+     */
+    public function genererPDF(Facture $facture): string
+    {
+        // Charger les données nécessaires
+        $facture->load(['commande.articlesCommandes', 'user']);
+
+        // Générer le HTML
+        $html = $this->genererHTMLFacture($facture);
+
+        // Créer le PDF
+        $pdf = Pdf::loadHTML($html);
+        $pdf->setPaper('A4', 'portrait');
+
+        // Nom du fichier
+        $nomFichier = 'factures/' . $facture->numero_facture . '.pdf';
+        
+        // Sauvegarder
+        Storage::disk('public')->put($nomFichier, $pdf->output());
+
+        // Mettre à jour la facture
+        $facture->update([
+            'fichier_pdf' => $nomFichier,
+            'statut' => 'envoyee',
+            'date_envoi' => now(),
+        ]);
+
+        return $nomFichier;
+    }
+
+    /**
+     * Génère le HTML de la facture
+     */
+    private function genererHTMLFacture(Facture $facture): string
+    {
+        return view('factures.template', compact('facture'))->render();
+    }
+
+    /**
+     * Calcule la TVA
+     */
+    private function calculerTVA(float $montant): float
+    {
+        return round($montant * ($this->tauxTVA / 100), 2);
+    }
+
+    /**
+     * Envoie la facture par email (optionnel)
+     */
+    public function envoyerParEmail(Facture $facture): bool
+    {
+        try {
+            // Ici tu peux ajouter l'envoi d'email
+            // Mail::to($facture->email_client)->send(new FactureMail($facture));
+            
+            $facture->update([
+                'statut' => 'envoyee',
+                'date_envoi' => now(),
+            ]);
+
+            return true;
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+}
